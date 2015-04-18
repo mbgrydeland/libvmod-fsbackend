@@ -1,4 +1,4 @@
-varnishtest "Test example vmod"
+varnishtest "Test fsbackend vmod"
 
 server s1 {
        rxreq
@@ -6,17 +6,19 @@ server s1 {
 } -start
 
 varnish v1 -vcl+backend {
-	import example from "${vmod_topbuild}/src/.libs/libvmod_example.so";
+	import fsbackend from "${vmod_topbuild}/src/.libs/libvmod_fsbackend.so";
 
-	sub vcl_deliver {
-		set resp.http.hello = example.hello("World");
+	sub vcl_init {
+		new root = fsbackend.root("/");
+	}
+
+	sub vcl_backend_fetch {
+		set bereq.backend = root.backend();
 	}
 } -start
 
 client c1 {
-	txreq -url "/"
+	txreq
 	rxresp
-	expect resp.http.hello == "Hello, World"
-}
-
-client c1 -run
+	expect resp.body == "asdf"
+} -run

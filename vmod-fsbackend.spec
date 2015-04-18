@@ -1,22 +1,22 @@
-Summary: Example VMOD for Varnish
-Name: vmod-example
+Summary: File system backend VMOD for Varnish
+Name: vmod-fsbackend
 Version: 0.1
 Release: 1%{?dist}
 License: BSD
 Group: System Environment/Daemons
-Source0: libvmod-example.tar.gz
+Source0: libvmod-fsbackend.tar.gz
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
-Requires: varnish >= 4.0.2
+Requires: varnish >= 4.1.0
 BuildRequires: make
 BuildRequires: python-docutils
-BuildRequires: varnish >= 4.0.2
-BuildRequires: varnish-libs-devel >= 4.0.2
+BuildRequires: varnish >= 4.1.0
+BuildRequires: varnish-libs-devel >= 4.1.0
 
 %description
-Example VMOD
+File system backend vmod for Varnish
 
 %prep
-%setup -n libvmod-example-trunk
+%setup -n libvmod-fsbackend-trunk
 
 %build
 %configure --prefix=/usr/
@@ -37,5 +37,5 @@ Example VMOD
 %{_mandir}/man?/*
 
 %changelog
-* Tue Nov 14 2012 Lasse Karstensen <lasse@varnish-software.com> - 0.1-0.20121114
-- Initial version.
+* Sun Apr 19 2015 Martin Blix Grydeland <martin@varnish-software.com> - 0.1-0.20150729
+- Initial version

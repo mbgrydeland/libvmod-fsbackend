@@ -1,45 +1,15 @@
-============
-vmod_example
-============
+==============
+vmod_fsbackend
+==============
 
-----------------------
-Varnish Example Module
-----------------------
+----------------------------------
+Varnish File System Backend Module
+----------------------------------
 
-:Date: 2015-03-03
-:Version: 1.0
-:Manual section: 3
+DOCUMENTATION
+=============
 
-SYNOPSIS
-========
-
-import example;
-
-DESCRIPTION
-===========
-
-Example Varnish vmod demonstrating how to write an out-of-tree Varnish vmod.
-
-Implements the traditional Hello World as a vmod.
-
-FUNCTIONS
-=========
-
-hello
------
-
-Prototype
-        ::
-
-                hello(STRING S)
-Return value
-	STRING
-Description
-	Returns "Hello, " prepended to S
-Example
-        ::
-
-                set resp.http.hello = example.hello("World");
+See src/vmod_fsbackend.vcc
 
 INSTALLATION
 ============
@@ -58,7 +28,7 @@ Usage::
 
 If you have installed Varnish to a non-standard directory, call
 ``autogen.sh`` and ``configure`` with ``PKG_CONFIG_PATH`` pointing to
-the appropriate path. For example, when varnishd configure was called
+the appropriate path. For fsbackend, when varnishd configure was called
 with ``--prefix=$PREFIX``, use
 
  PKG_CONFIG_PATH=${PREFIX}/lib/pkgconfig
@@ -71,14 +41,6 @@ Make targets:
 * make check - runs the unit tests in ``src/tests/*.vtc``
 * make distcheck - run check and prepare a tarball of the vmod.
 
-In your VCL you could then use this vmod along the following lines::
-
-        import example;
-
-        sub vcl_deliver {
-                # This sets resp.http.hello to "Hello, World"
-                set resp.http.hello = example.hello("World");
-        }
 
 COMMON PROBLEMS
 ===============
