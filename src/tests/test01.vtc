@@ -16,8 +16,16 @@ varnish v1 -vcl+backend {
 		new root = fsbackend.root("${tmpdir}/fsb");
 	}
 
+	sub vcl_hit {
+		set req.http.hit = true;
+	}
+
 	sub vcl_backend_fetch {
 		set bereq.backend = root.backend();
+	}
+
+	sub vcl_deliver {
+		set resp.http.hit = req.http.hit;
 	}
 } -start
 
@@ -25,6 +33,23 @@ varnish v1 -vcl+backend {
 shell "echo -n foo > ${tmpdir}/fsb/foo"
 client c1 {
 	txreq -url /foo
+	rxresp
+	expect resp.status == 200
+	expect resp.body == "foo"
+} -run
+
+# Check that the result enters the cache
+client c1 {
+	txreq -url /foo
+	rxresp
+	expect resp.status == 200
+	expect resp.body == "foo"
+	expect resp.http.hit == "true"
+} -run
+
+# Test /foo written in percent-encoding
+client c1 {
+	txreq -url /%66%6f%6F
 	rxresp
 	expect resp.status == 200
 	expect resp.body == "foo"
@@ -72,4 +97,19 @@ client c1 {
 	rxresp
 	expect resp.status == 200
 	expect resp.body == "foo"
+} -run
+
+# Check that ../ inside of root is ok
+client c1 {
+	txreq -url /dir/../foo
+	rxresp
+	expect resp.status == 200
+	expect resp.body == "foo"
+} -run
+
+# Check that ../ outside of root gives 403
+client c1 {
+	txreq -url /../bar
+	rxresp
+	expect resp.status == 403
 } -run

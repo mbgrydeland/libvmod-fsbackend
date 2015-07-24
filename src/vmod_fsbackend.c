@@ -271,7 +271,7 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 	}
 
 	bo->htc->content_length = stat.st_size;
-	http_PutResponse(bo->beresp, "HTTP/1.1", 200, NULL);
+	http_PutResponse(bo->beresp, "HTTP/1.1", E200_OK, NULL);
 	http_PrintfHeader(bo->beresp, "Content-Length: %jd",
 	    bo->htc->content_length);
 	bo->htc->body_status = BS_LENGTH;
