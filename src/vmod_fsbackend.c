@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <limits.h>
 #include <unistd.h>
 #include <errno.h>
@@ -49,6 +50,13 @@
 #include "cache/cache_filter.h"
 
 #include "vcc_if.h"
+
+#define E200_OK				200
+#define E400_BAD_REQUEST		400
+#define E403_FORBIDDEN			403
+#define E404_NOT_FOUND			404
+#define E414_URI_TOO_LONG		414
+#define E500_SERVER_ERROR		500
 
 struct vmod_fsbackend_root {
 	unsigned			magic;
@@ -68,6 +76,54 @@ struct fsb_conn {
 	int				fd;
 	struct vsb			*synth;
 };
+
+static int
+fromhex(int c)
+{
+	c = tolower(c);
+	if (c <= '9')
+		return (c - '0');
+	return (10 + (c - 'a'));
+}
+
+static int
+penc_decode(char *d, txt s, size_t n)
+{
+	int c;
+	ssize_t l;
+
+	AN(s.b);
+	AN(d);
+	if (n == 0)
+		return (0);
+	l = 0;
+	while (s.b < s.e && l < (n - 1)) {
+		if (s.b[0] == '%') {
+			if (s.e - s.b >= 3 &&
+			    isxdigit(s.b[1]) && isxdigit(s.b[2])) {
+				c = fromhex(s.b[1]);
+				c *= 0x10;
+				c += fromhex(s.b[2]);
+				d[l++] = c;
+				s.b += 3;
+			} else if (s.e - s.b >= 2 && s.b[1] == '%') {
+				d[l++] = '%';
+				s.b += 2;
+			} else
+				return (0);
+		} else if (s.b[0] == '+') {
+			d[l++] = ' ';
+			s.b++;
+		} else {
+			d[l++] = s.b[0];
+			s.b++;
+		}
+	}
+	if (s.b < s.e)
+		return (0);
+	d[l++] = '\0';
+	return (1);
+}
 
 static int
 fsb_synth(struct busyobj *bo, unsigned status)
@@ -115,7 +171,7 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 	struct vmod_fsbackend_root *root;
 	struct fsb_conn *conn;
 	int i;
-	char buf[PATH_MAX], path[PATH_MAX];
+	char buf1[PATH_MAX], buf2[PATH_MAX];
 	txt url;
 	char *p;
 	struct stat stat;
@@ -123,6 +179,7 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 	CHECK_OBJ_NOTNULL(dir, DIRECTOR_MAGIC);
 	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
 	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
+	CHECK_OBJ_NOTNULL(bo->bereq, HTTP_MAGIC);
 	CHECK_OBJ_NOTNULL(bo->beresp, HTTP_MAGIC);
 
 	CAST_OBJ_NOTNULL(root, dir->priv, VMOD_FSBACKEND_ROOT_MAGIC);
@@ -143,57 +200,53 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 
 	url = bo->bereq->hd[HTTP_HDR_URL];
 	if (url.b == NULL)
-		return (fsb_synth(bo, 500));
+		return (fsb_synth(bo, E500_SERVER_ERROR));
 	AN(url.e);
 	AZ(*url.e);		/* Null terminated */
 
-	VSLb(bo->vsl, SLT_Debug, "url: '%s'", url.b);
-
 	while (*url.b == '/')
 		url.b++;
-
 	p = strchr(url.b, '?');
 	if (p)
 		url.e = p;
 
-	i = snprintf(buf, sizeof buf, "%s/%.*s",
-	    root->root, (int)(url.e - url.b), url.b);
-	VSLb(bo->vsl, SLT_Debug, "buf: '%s'", buf);
-	if (i >= sizeof buf)
-		return (fsb_synth(bo, 414));
+	if (!penc_decode(buf1, url, sizeof buf1))
+		return (fsb_synth(bo, E400_BAD_REQUEST));
 
-	if (!realpath(buf, path)) {
+	i = snprintf(buf2, sizeof buf2, "%s/%s", root->root, buf1);
+	if (i >= sizeof buf2)
+		return (fsb_synth(bo, E414_URI_TOO_LONG));
+	VSLb(bo->vsl, SLT_Debug, "path: '%s'", buf2);
+
+	if (!realpath(buf2, buf1)) {
 		switch (errno) {
 		case EACCES:
-			return (fsb_synth(bo, 403));
+			return (fsb_synth(bo, E403_FORBIDDEN));
 		case ENAMETOOLONG:
-			return (fsb_synth(bo, 414));
+			return (fsb_synth(bo, E414_URI_TOO_LONG));
 		case ENOENT:
 		case ENOTDIR:
-			return (fsb_synth(bo, 404));
+			return (fsb_synth(bo, E404_NOT_FOUND));
 		default:
-			return (fsb_synth(bo, 500));
+			return (fsb_synth(bo, E500_SERVER_ERROR));
 		}
 	}
+	VSLb(bo->vsl, SLT_Debug, "realpath: '%s'", buf1);
 
-	VSLb(bo->vsl, SLT_Debug, "path: '%s'", path);
 	VSLb(bo->vsl, SLT_Debug, "root: '%s'", root->root);
 
-	if (strncmp(path, root->root, strlen(root->root)))
-		return (fsb_synth(bo, 403));
+	if (strncmp(buf1, root->root, strlen(root->root)))
+		return (fsb_synth(bo, E403_FORBIDDEN));
 
-	VSLb(bo->vsl, SLT_Debug, "buf: '%s'", buf);
-
-	conn->fd = open(buf, O_RDONLY);
+	conn->fd = open(buf1, O_RDONLY);
 	if (conn->fd < 0) {
-		VSLb(bo->vsl, SLT_Debug, "open failed");
 		switch (errno) {
 		case EACCES:
-			return (fsb_synth(bo, 403));
+			return (fsb_synth(bo, E403_FORBIDDEN));
 		case ENAMETOOLONG:
-			return (fsb_synth(bo, 414));
+			return (fsb_synth(bo, E414_URI_TOO_LONG));
 		default:
-			return (fsb_synth(bo, 500));
+			return (fsb_synth(bo, E500_SERVER_ERROR));
 		}
 	}
 
@@ -203,18 +256,18 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 		conn->fd = -1;
 		switch (errno) {
 		case EACCES:
-			return (fsb_synth(bo, 403));
+			return (fsb_synth(bo, E403_FORBIDDEN));
 		default:
-			return (fsb_synth(bo, 500));
+			return (fsb_synth(bo, E500_SERVER_ERROR));
 		}
 	}
 
-	if ((stat.st_mode & S_IFMT) != S_IFREG) {
+	if (!S_ISREG(stat.st_mode)) {
 		VSLb(bo->vsl, SLT_Debug, "not a file: 0x%x",
 		    stat.st_mode & S_IFMT);
 		close(conn->fd);
 		conn->fd = -1;
-		return (fsb_synth(bo, 403));
+		return (fsb_synth(bo, E403_FORBIDDEN));
 	}
 
 	bo->htc->content_length = stat.st_size;
@@ -363,6 +416,7 @@ vmod_root__init(VRT_CTX, struct vmod_fsbackend_root **p_root,
 {
 	struct vmod_fsbackend_root *root;
 	char buf[PATH_MAX];
+	struct stat st;
 
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 	AN(ctx->msg);
@@ -383,7 +437,17 @@ vmod_root__init(VRT_CTX, struct vmod_fsbackend_root **p_root,
 		goto error;
 	}
 	if (!realpath(rootdir, buf)) {
-		VSB_printf(ctx->msg, "Bad path: %s.\n", strerror(errno));
+		VSB_printf(ctx->msg, "Can't resolve path '%s': %s.\n",
+		    rootdir, strerror(errno));
+		goto error;
+	}
+	if (!stat(buf, &st)) {
+		VSB_printf(ctx->msg, "Can't stat '%s': %s.\n",
+		    buf, strerror(errno));
+		goto error;
+	}
+	if (!S_ISDIR(st.st_mode)) {
+		VSB_printf(ctx->msg, "'%s' is not a directory.\n", buf);
 		goto error;
 	}
 	REPLACE(root->root, buf);
