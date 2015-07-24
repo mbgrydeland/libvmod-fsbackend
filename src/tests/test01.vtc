@@ -5,11 +5,15 @@ server s1 {
        txresp
 } -start
 
+# Create root directory
+shell "mkdir ${tmpdir}/fsb"
+shell "ln -s ${tmpdir}/fsb/foo ${tmpdir}/fsb/foolink"
+
 varnish v1 -vcl+backend {
 	import fsbackend from "${vmod_topbuild}/src/.libs/libvmod_fsbackend.so";
 
 	sub vcl_init {
-		new root = fsbackend.root("/");
+		new root = fsbackend.root("${tmpdir}/fsb");
 	}
 
 	sub vcl_backend_fetch {
@@ -17,8 +21,55 @@ varnish v1 -vcl+backend {
 	}
 } -start
 
+# Test normal file delivery
+shell "echo -n foo > ${tmpdir}/fsb/foo"
 client c1 {
-	txreq
+	txreq -url /foo
 	rxresp
-	expect resp.body == "asdf"
+	expect resp.status == 200
+	expect resp.body == "foo"
+} -run
+
+# Test file named '%'
+shell "echo -n percent > ${tmpdir}/fsb/%"
+client c1 {
+	txreq -url /%%
+	rxresp
+	expect resp.status == 200
+	expect resp.body == "percent"
+} -run
+
+# Test file named '&'
+shell "echo -n ampersand > ${tmpdir}/fsb/\\&"
+client c1 {
+	txreq -url /%26
+	rxresp
+	expect resp.status == 200
+	expect resp.body == "ampersand"
+} -run
+
+# Check that directory listing gives 403
+client c1 {
+	txreq -url /
+	rxresp
+	expect resp.status == 403
+} -run
+
+# Check that symlink out of root directory gives 403
+shell "echo -n bar > ${tmpdir}/bar"
+shell "ln -s ../bar ${tmpdir}/fsb/barlink"
+client c1 {
+	txreq -url /barlink
+	rxresp
+	expect resp.status == 403
+} -run
+
+# Check that symlink inside of root is ok
+shell "mkdir ${tmpdir}/fsb/dir"
+shell "ln -s ../foo ${tmpdir}/fsb/dir/foolink"
+client c1 {
+	txreq -url /foolink
+	rxresp
+	expect resp.status == 200
+	expect resp.body == "foo"
 } -run

@@ -441,7 +441,7 @@ vmod_root__init(VRT_CTX, struct vmod_fsbackend_root **p_root,
 		    rootdir, strerror(errno));
 		goto error;
 	}
-	if (!stat(buf, &st)) {
+	if (stat(buf, &st)) {
 		VSB_printf(ctx->msg, "Can't stat '%s': %s.\n",
 		    buf, strerror(errno));
 		goto error;
