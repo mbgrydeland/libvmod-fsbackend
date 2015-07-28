@@ -56,6 +56,13 @@ client c1 {
 	expect resp.body == "foo"
 } -run
 
+# Test invalid percent-encoding
+client c1 {
+	txreq -url /%66%6f%6?bar=baz
+	rxresp
+	expect resp.status == 400
+} -run
+
 # Test file named '%'
 shell "echo -n percent > ${tmpdir}/fsb/%"
 client c1 {
