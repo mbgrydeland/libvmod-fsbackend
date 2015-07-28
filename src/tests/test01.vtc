@@ -35,6 +35,7 @@ client c1 {
 	txreq -url /foo
 	rxresp
 	expect resp.status == 200
+	expect resp.http.last-modified != "<undef>"
 	expect resp.body == "foo"
 } -run
 

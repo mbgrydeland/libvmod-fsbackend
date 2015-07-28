@@ -45,6 +45,7 @@
 #include "vrt.h"
 #include "vdef.h"
 #include "vsb.h"
+#include "vtim.h"
 #include "cache/cache.h"
 #include "cache/cache_director.h"
 #include "cache/cache_filter.h"
@@ -270,11 +271,16 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 		return (fsb_synth(bo, E403_FORBIDDEN));
 	}
 
-	bo->htc->content_length = stat.st_size;
 	http_PutResponse(bo->beresp, "HTTP/1.1", E200_OK, NULL);
-	http_PrintfHeader(bo->beresp, "Content-Length: %jd",
-	    bo->htc->content_length);
+
+	http_PrintfHeader(bo->beresp, "Content-Length: %jd", stat.st_size);
+
+	assert(sizeof buf1 >= VTIM_FORMAT_SIZE);
+	VTIM_format(stat.st_mtim.tv_sec, buf1);
+	http_PrintfHeader(bo->beresp, "Last-Modified: %s", buf1);
+
 	bo->htc->body_status = BS_LENGTH;
+	bo->htc->content_length = stat.st_size;
 
 	return (0);
 }
