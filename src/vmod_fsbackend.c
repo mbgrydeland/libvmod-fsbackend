@@ -175,7 +175,7 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 	char buf1[PATH_MAX], buf2[PATH_MAX];
 	txt url;
 	char *p;
-	struct stat stat;
+	struct stat st, fst;
 
 	CHECK_OBJ_NOTNULL(dir, DIRECTOR_MAGIC);
 	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
@@ -219,7 +219,7 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 		return (fsb_synth(bo, E414_URI_TOO_LONG));
 	VSLb(bo->vsl, SLT_Debug, "path: '%s'", buf2);
 
-	if (!realpath(buf2, buf1)) {
+	if (stat(buf2, &st) || !realpath(buf2, buf1)) {
 		switch (errno) {
 		case EACCES:
 			return (fsb_synth(bo, E403_FORBIDDEN));
@@ -251,7 +251,7 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 		}
 	}
 
-	if (fstat(conn->fd, &stat)) {
+	if (fstat(conn->fd, &fst)) {
 		VSLb(bo->vsl, SLT_Debug, "stat failed");
 		close(conn->fd);
 		conn->fd = -1;
@@ -263,9 +263,15 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 		}
 	}
 
-	if (!S_ISREG(stat.st_mode)) {
+	if (st.st_dev != fst.st_dev || st.st_ino != fst.st_ino) {
+		close(conn->fd);
+		conn->fd = -1;
+		return (fsb_synth(bo, E500_SERVER_ERROR));
+	}
+
+	if (!S_ISREG(fst.st_mode)) {
 		VSLb(bo->vsl, SLT_Debug, "not a file: 0x%x",
-		    stat.st_mode & S_IFMT);
+		    st.st_mode & S_IFMT);
 		close(conn->fd);
 		conn->fd = -1;
 		return (fsb_synth(bo, E403_FORBIDDEN));
@@ -273,14 +279,14 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 
 	http_PutResponse(bo->beresp, "HTTP/1.1", E200_OK, NULL);
 
-	http_PrintfHeader(bo->beresp, "Content-Length: %jd", stat.st_size);
+	http_PrintfHeader(bo->beresp, "Content-Length: %jd", fst.st_size);
 
 	assert(sizeof buf1 >= VTIM_FORMAT_SIZE);
-	VTIM_format(stat.st_mtim.tv_sec, buf1);
+	VTIM_format(fst.st_mtim.tv_sec, buf1);
 	http_PrintfHeader(bo->beresp, "Last-Modified: %s", buf1);
 
 	bo->htc->body_status = BS_LENGTH;
-	bo->htc->content_length = stat.st_size;
+	bo->htc->content_length = fst.st_size;
 
 	return (0);
 }
