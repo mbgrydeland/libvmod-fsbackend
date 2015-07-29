@@ -208,7 +208,7 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 	bo->htc = WS_Alloc(bo->ws, sizeof *bo->htc);
 	if (bo->htc == NULL)
 		return (-1);
-	HTC_InitObj(bo->htc, &conn->fd, NULL);
+	INIT_OBJ(bo->htc, HTTP_CONN_MAGIC);
 	bo->htc->priv = conn;
 
 	url = bo->bereq->hd[HTTP_HDR_URL];
