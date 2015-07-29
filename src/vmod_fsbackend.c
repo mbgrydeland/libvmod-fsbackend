@@ -229,7 +229,6 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 	i = snprintf(buf2, sizeof buf2, "%s/%s", root->root, buf1);
 	if (i >= sizeof buf2)
 		return (fsb_synth(bo, E414_URI_TOO_LONG));
-	VSLb(bo->vsl, SLT_Debug, "path: '%s'", buf2);
 
 	if (stat(buf2, &st) || !realpath(buf2, buf1)) {
 		switch (errno) {
@@ -244,9 +243,6 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 			return (fsb_synth(bo, E500_SERVER_ERROR));
 		}
 	}
-	VSLb(bo->vsl, SLT_Debug, "realpath: '%s'", buf1);
-
-	VSLb(bo->vsl, SLT_Debug, "root: '%s'", root->root);
 
 	if (strncmp(buf1, root->root, strlen(root->root)))
 		return (fsb_synth(bo, E403_FORBIDDEN));
@@ -264,7 +260,6 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 	}
 
 	if (fstat(conn->fd, &fst)) {
-		VSLb(bo->vsl, SLT_Debug, "stat failed");
 		close(conn->fd);
 		conn->fd = -1;
 		switch (errno) {
@@ -282,8 +277,6 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 	}
 
 	if (!S_ISREG(fst.st_mode)) {
-		VSLb(bo->vsl, SLT_Debug, "not a file: 0x%x",
-		    st.st_mode & S_IFMT);
 		close(conn->fd);
 		conn->fd = -1;
 		return (fsb_synth(bo, E403_FORBIDDEN));
