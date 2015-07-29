@@ -26,27 +26,63 @@
 # SUCH DAMAGE.
 #
 
-$Module fsbackend 3 Filesystem backend VMOD
+$Module fsbackend 3 Filesystem backend vmod
 
 DESCRIPTION
 ===========
 
-`vmod_fsbackend` implements something
+`vmod_fsbackend` allows serving static files through a Varnish backend
+vmod. The backend request URL is appended to the vmod's root directory
+to form a filepath. If the filepath resolves to a regular file and is
+readable to the Varnish child process, it is used as the source for
+this backend fetch operation.
+
+The following headers are added based on the resolved files
+attributes: Last-Modified and Content-Length.
+
+Any number of additional static headers can be added.
+
+If the file could not be read for any reason (e.g. not found, access
+restrictions or resolved outside of the root directory of the vmod),
+an appropriate error response is synthesized.
 
 $Event vmod_event
 
 $Object root(STRING rootdir)
 
+Prototype
+	OBJECT vmod_fsbackend.root(STRING rootdir)
+
 Description
-	Creates a filesystem root
-Example
-	new root = vmod_fsbackend.root("/var/www/html/");
+	Creates a filesystem root. The rootdir argument is the base of the
+	filesystem hierarchy.
+
+Example::
+
+	import fsbackend;
+	sub vcl_init {
+		new root = vmod_fsbackend.root("/var/www/html/");
+		root.add_header("Content-Type: text/html");
+	}
+	sub vcl_backend_fetch {
+		set bereq.backend = root.backend();
+	}
 
 $Method VOID .add_header(STRING header)
+
+Description
+	Add a static header to be present on all successful fetches through
+	the backend.
+
+Example::
+
+	root.add_header("Cache-Control: public,max-age=86400");
 
 $Method BACKEND .backend()
 
 Description
-	Return a backend
-Example
+	Return a backend reference to this root for use during fetch.
+
+Example::
+
 	set req.backend_hint = root.backend();
