@@ -14,6 +14,7 @@ varnish v1 -vcl+backend {
 
 	sub vcl_init {
 		new root = fsbackend.root("${tmpdir}/fsb");
+		root.add_header("Cache-Control: public,max-age=10");
 	}
 
 	sub vcl_hit {
@@ -36,6 +37,7 @@ client c1 {
 	rxresp
 	expect resp.status == 200
 	expect resp.http.last-modified != "<undef>"
+	expect resp.http.cache-control == "public,max-age=10"
 	expect resp.body == "foo"
 } -run
 

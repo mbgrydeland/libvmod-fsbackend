@@ -46,6 +46,7 @@
 #include "vdef.h"
 #include "vsb.h"
 #include "vtim.h"
+#include "vqueue.h"
 #include "cache/cache.h"
 #include "cache/cache_director.h"
 #include "cache/cache_filter.h"
@@ -59,11 +60,21 @@
 #define E414_URI_TOO_LONG		414
 #define E500_SERVER_ERROR		500
 
+struct fsb_header {
+	unsigned			magic;
+#define FSB_HEADER_MAGIC		0x6ae00a29
+
+	VTAILQ_ENTRY(fsb_header)	list;
+	char				*hdrstr;
+};
+
 struct vmod_fsbackend_root {
 	unsigned			magic;
 #define VMOD_FSBACKEND_ROOT_MAGIC	0xd6ad5238
 
 	char				*root;
+
+	VTAILQ_HEAD(,fsb_header)	headers;
 
 	struct director			dir[1];
 };
@@ -176,6 +187,7 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 	txt url;
 	char *p;
 	struct stat st, fst;
+	const struct fsb_header *hdr;
 
 	CHECK_OBJ_NOTNULL(dir, DIRECTOR_MAGIC);
 	CHECK_OBJ_NOTNULL(wrk, WORKER_MAGIC);
@@ -284,6 +296,11 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 	assert(sizeof buf1 >= VTIM_FORMAT_SIZE);
 	VTIM_format(fst.st_mtim.tv_sec, buf1);
 	http_PrintfHeader(bo->beresp, "Last-Modified: %s", buf1);
+
+	VTAILQ_FOREACH(hdr, &root->headers, list) {
+		CHECK_OBJ_NOTNULL(hdr, FSB_HEADER_MAGIC);
+		http_SetHeader(bo->beresp, hdr->hdrstr);
+	}
 
 	bo->htc->body_status = BS_LENGTH;
 	bo->htc->content_length = fst.st_size;
@@ -464,6 +481,8 @@ vmod_root__init(VRT_CTX, struct vmod_fsbackend_root **p_root,
 	}
 	REPLACE(root->root, buf);
 
+	VTAILQ_INIT(&root->headers);
+
 	INIT_OBJ(root->dir, DIRECTOR_MAGIC);
 	root->dir->name = root->root;
 	REPLACE(root->dir->vcl_name, vcl_name);
@@ -490,6 +509,7 @@ VCL_VOID
 vmod_root__fini(struct vmod_fsbackend_root **p_root)
 {
 	struct vmod_fsbackend_root *root;
+	struct fsb_header *hdr;
 
 	AN(p_root);
 	root = *p_root;
@@ -500,7 +520,32 @@ vmod_root__fini(struct vmod_fsbackend_root **p_root)
 
 	free(root->root);
 	free(root->dir->vcl_name);
+	while (!VTAILQ_EMPTY(&root->headers)) {
+		hdr = VTAILQ_FIRST(&root->headers);
+		CHECK_OBJ_NOTNULL(hdr, FSB_HEADER_MAGIC);
+		VTAILQ_REMOVE(&root->headers, hdr, list);
+		free(hdr->hdrstr);
+		FREE_OBJ(hdr);
+	}
 	FREE_OBJ(root);
+}
+
+VCL_VOID
+vmod_root_add_header(VRT_CTX, struct vmod_fsbackend_root *root,
+    VCL_STRING hdrstr)
+{
+	struct fsb_header *hdr;
+
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+	CHECK_OBJ_NOTNULL(root, VMOD_FSBACKEND_ROOT_MAGIC);
+
+	if (hdrstr == NULL || *hdrstr == '\0')
+		return;
+
+	ALLOC_OBJ(hdr, FSB_HEADER_MAGIC);
+	AN(hdr);
+	REPLACE(hdr->hdrstr, hdrstr);
+	VTAILQ_INSERT_TAIL(&root->headers, hdr, list);
 }
 
 VCL_BACKEND

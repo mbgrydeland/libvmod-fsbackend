@@ -42,6 +42,8 @@ Description
 Example
 	new root = vmod_fsbackend.root("/var/www/html/");
 
+$Method VOID .add_header(STRING header)
+
 $Method BACKEND .backend()
 
 Description
