@@ -48,10 +48,10 @@ an appropriate error response is synthesized.
 
 $Event vmod_event
 
-$Object root(STRING rootdir)
+$Object root(STRING rootdir, STRING mimedb = "/etc/mime.types")
 
 Prototype
-	OBJECT vmod_fsbackend.root(STRING rootdir)
+	OBJECT vmod_fsbackend.root(STRING rootdir, STRING mimedb = "/etc/mime.types")
 
 Description
 	Creates a filesystem root. The rootdir argument is the base of the

@@ -1,0 +1,49 @@
+varnishtest "Test fsbackend vmod mimetype"
+
+# Dummy backend
+server s1 {
+       rxreq
+       txresp
+} -start
+
+# Create root directory
+shell "mkdir ${tmpdir}/fsb"
+
+shell "echo -n 'asdf' > ${tmpdir}/fsb/foo.html"
+shell "echo -n 'asdf' > ${tmpdir}/fsb/foo"
+shell "echo -n 'asdf' > ${tmpdir}/fsb/foo.xhtml"
+
+shell "echo '#comment' >> ${tmpdir}/mime.types"
+shell "echo >> ${tmpdir}/mime.types"
+shell "echo 'text/text' >> ${tmpdir}/mime.types"
+shell "echo 'text/html		  html xhtml html' >> ${tmpdir}/mime.types"
+shell "echo 'text/xhtml xhtml' >> ${tmpdir}/mime.types"
+
+varnish v1 -vcl+backend {
+	import fsbackend from "${vmod_topbuild}/src/.libs/libvmod_fsbackend.so";
+
+	sub vcl_init {
+		new root = fsbackend.root("${tmpdir}/fsb", mimedb = "${tmpdir}/mime.types");
+	}
+
+	sub vcl_backend_fetch {
+		set bereq.backend = root.backend();
+	}
+} -start
+
+client c1 {
+	txreq -url /foo.html
+	rxresp
+	expect resp.status == 200
+	expect resp.http.content-type == "text/html"
+
+	txreq -url /foo
+	rxresp
+	expect resp.status == 200
+	expect resp.http.content-type == "<undef>"
+
+	txreq -url /foo.xhtml
+	rxresp
+	expect resp.status == 200
+	expect resp.http.content-type == "text/xhtml"
+} -run

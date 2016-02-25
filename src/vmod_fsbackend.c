@@ -53,6 +53,10 @@
 
 #include "vcc_if.h"
 
+#include "vtree.h"
+
+#define FSB_EXT_MAX			15
+
 #define E200_OK				200
 #define E400_BAD_REQUEST		400
 #define E403_FORBIDDEN			403
@@ -68,9 +72,22 @@ struct fsb_header {
 	char				*hdrstr;
 };
 
+struct fsb_mimetype {
+	unsigned			magic;
+#define FSB_MIMETYPE_MAGIC		0x1b9b464c
+
+	char				ext[FSB_EXT_MAX + 1];
+	char				*type;
+	VRB_ENTRY(fsb_mimetype)		entry;
+};
+
+VRB_HEAD(mimedb, fsb_mimetype);
+
 struct vmod_fsbackend_root {
 	unsigned			magic;
 #define VMOD_FSBACKEND_ROOT_MAGIC	0xd6ad5238
+
+	struct mimedb			mimedb;
 
 	char				*root;
 
@@ -88,6 +105,15 @@ struct fsb_conn {
 	int				fd;
 	struct vsb			*synth;
 };
+
+static inline int
+cmp_mimetype(const struct fsb_mimetype *a, const struct fsb_mimetype *b)
+{
+	return (strcasecmp(a->ext, b->ext));
+}
+
+VRB_PROTOTYPE_STATIC(mimedb, fsb_mimetype, entry, cmp_mimetype);
+VRB_GENERATE_STATIC(mimedb, fsb_mimetype, entry, cmp_mimetype);
 
 static int
 fromhex(int c)
@@ -137,6 +163,135 @@ penc_decode(char *d, txt s, size_t n)
 	return (1);
 }
 
+static void
+fsb_mime_readdb(struct vmod_fsbackend_root *root, const char *mimedb)
+{
+	FILE *in;
+	char *buf = NULL;
+	size_t buflen = 0;
+	ssize_t l;
+	char *b, *p;
+	const char *type;
+	const char *ext;
+	struct fsb_mimetype *entry, tmpentry;
+
+	CHECK_OBJ_NOTNULL(root, VMOD_FSBACKEND_ROOT_MAGIC);
+	AN(mimedb);
+
+	in = fopen(mimedb, "r");
+	if (in == NULL)
+		return;
+
+	INIT_OBJ(&tmpentry, FSB_MIMETYPE_MAGIC);
+
+	while (1) {
+		l = getline(&buf, &buflen, in);
+		if (l < 0)
+			break;
+		l = strlen(buf);
+		b = buf;
+
+		while (*b && isspace(*b))
+			b++;
+		if (*b == '#')
+			continue; /* Comment */
+
+		/* Mime type */
+		p = b;
+		while (*p && !isspace(*p))
+			p++;
+		if (p == b)
+			continue; /* Empty line */
+		*p++ = '\0';
+		type = b;
+		b = p;
+
+		/* Extensions */
+		while (*b) {
+			p = b;
+			while (*p && isspace(*p))
+				p++;
+			b = p;
+			while (*p && !isspace(*p))
+				p++;
+			if (p == b)
+				break;
+			*p++ = '\0';
+			ext = b;
+			b = p;
+
+			if (strlen(ext) > FSB_EXT_MAX)
+				continue; /* Too large, ignore */
+
+			strncpy(tmpentry.ext, ext, FSB_EXT_MAX);
+			entry = VRB_FIND(mimedb, &root->mimedb, &tmpentry);
+			if (entry != NULL) {
+				/* Already exists. Later entries overwrite
+				   previous */
+				CHECK_OBJ_NOTNULL(entry, FSB_MIMETYPE_MAGIC);
+				AN(entry->type);
+				free(entry->type);
+				entry->type = strdup(type);
+				AN(entry->type);
+				continue;
+			}
+
+			ALLOC_OBJ(entry, FSB_MIMETYPE_MAGIC);
+			AN(entry);
+			strncpy(entry->ext, ext, FSB_EXT_MAX);
+			entry->type = strdup(type);
+			AN(entry->type);
+			AZ(VRB_INSERT(mimedb, &root->mimedb, entry));
+		}
+	}
+	free(buf);
+	fclose(in);
+}
+
+static const char *
+fsb_mime_lookup(const struct vmod_fsbackend_root *root, const char *filename)
+{
+	const char *ext;
+	struct fsb_mimetype *entry, tmpentry;
+
+	CHECK_OBJ_NOTNULL(root, VMOD_FSBACKEND_ROOT_MAGIC);
+	AN(filename);
+
+	ext = strrchr(filename, '.');
+	if (ext == NULL)
+		return (NULL);
+	ext++;
+	if (!*ext)
+		return (NULL);
+	if (strlen(ext) > FSB_EXT_MAX)
+		return (NULL);
+
+	INIT_OBJ(&tmpentry, FSB_MIMETYPE_MAGIC);
+	strncpy(tmpentry.ext, ext, FSB_EXT_MAX);
+
+	entry = VRB_FIND(mimedb, &root->mimedb, &tmpentry);
+	CHECK_OBJ_ORNULL(entry, FSB_MIMETYPE_MAGIC);
+	if (entry == NULL)
+		return (NULL);
+	return (entry->type);
+}
+
+static void
+fsb_mime_cleanup(struct vmod_fsbackend_root *root)
+{
+	struct fsb_mimetype *e, *e2;
+
+	CHECK_OBJ_NOTNULL(root, VMOD_FSBACKEND_ROOT_MAGIC);
+
+	VRB_FOREACH_SAFE(e, mimedb, &root->mimedb, e2) {
+		AN(VRB_REMOVE(mimedb, &root->mimedb, e));
+		CHECK_OBJ_NOTNULL(e, FSB_MIMETYPE_MAGIC);
+		AN(e->type);
+		free(e->type);
+		FREE_OBJ(e);
+	}
+}
+
 static int
 fsb_synth(struct busyobj *bo, unsigned status)
 {
@@ -184,6 +339,7 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 	struct fsb_conn *conn;
 	int i;
 	char buf1[PATH_MAX], buf2[PATH_MAX];
+	const char *mimetype;
 	txt url;
 	char *p;
 	struct stat st, fst;
@@ -225,6 +381,8 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 
 	if (!penc_decode(buf1, url, sizeof buf1))
 		return (fsb_synth(bo, E400_BAD_REQUEST));
+
+	mimetype = fsb_mime_lookup(root, buf1);
 
 	i = snprintf(buf2, sizeof buf2, "%s/%s", root->root, buf1);
 	if (i >= sizeof buf2)
@@ -294,6 +452,9 @@ fsb_gethdrs(const struct director *dir, struct worker *wrk, struct busyobj *bo)
 		CHECK_OBJ_NOTNULL(hdr, FSB_HEADER_MAGIC);
 		http_SetHeader(bo->beresp, hdr->hdrstr);
 	}
+
+	if (mimetype)
+		http_PrintfHeader(bo->beresp, "Content-Type: %s", mimetype);
 
 	bo->htc->body_status = BS_LENGTH;
 	bo->htc->content_length = fst.st_size;
@@ -434,7 +595,7 @@ fsb_panic(const struct director *dir, struct vsb *vsb)
 
 VCL_VOID
 vmod_root__init(VRT_CTX, struct vmod_fsbackend_root **p_root,
-    const char *vcl_name, VCL_STRING rootdir)
+    const char *vcl_name, VCL_STRING rootdir, VCL_STRING mimedb)
 {
 	struct vmod_fsbackend_root *root;
 	char buf[PATH_MAX];
@@ -448,6 +609,8 @@ vmod_root__init(VRT_CTX, struct vmod_fsbackend_root **p_root,
 
 	ALLOC_OBJ(root, VMOD_FSBACKEND_ROOT_MAGIC);
 	AN(root);
+
+	VRB_INIT(&root->mimedb);
 
 	if (rootdir == NULL || strlen(rootdir) == 0) {
 		VSB_printf(ctx->msg, "No root directory specified.\n");
@@ -485,6 +648,9 @@ vmod_root__init(VRT_CTX, struct vmod_fsbackend_root **p_root,
 	root->dir->finish = fsb_finish;
 	root->dir->panic = fsb_panic;
 
+	if (mimedb)
+		fsb_mime_readdb(root, mimedb);
+
 	*p_root = root;
 	return;
 
@@ -520,6 +686,7 @@ vmod_root__fini(struct vmod_fsbackend_root **p_root)
 		free(hdr->hdrstr);
 		FREE_OBJ(hdr);
 	}
+	fsb_mime_cleanup(root);
 	FREE_OBJ(root);
 }
 
